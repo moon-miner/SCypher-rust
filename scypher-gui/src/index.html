@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SCypher GUI - Test</title>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(40, 40, 40, 0.95);
+            border-radius: 12px;
+            border: 1px solid #4a4a4a;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            color: #ff9500;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(30, 30, 30, 0.6);
+            border-radius: 8px;
+            border: 1px solid #4a4a4a;
+        }
+        button {
+            background: linear-gradient(135deg, #ff9500 0%, #ff7b00 100%);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 149, 0, 0.4);
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(60, 60, 60, 0.5);
+            border: 1px solid #555;
+            border-radius: 6px;
+            color: #e0e0e0;
+            margin: 10px 0;
+            font-family: inherit;
+            box-sizing: border-box;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(20, 20, 20, 0.7);
+            border-radius: 6px;
+            border: 1px solid #333;
+            font-family: monospace;
+            color: #10b981;
+            min-height: 40px;
+        }
+        .result.error {
+            color: #ef4444;
+        }
+        .status {
+            color: #888;
+            font-size: 0.9em;
+            text-align: center;
+            margin-top: 20px;
+        }
+        .debug-buttons {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .debug-buttons button {
+            background: #666;
+            font-size: 0.8em;
+            padding: 8px 12px;
+            margin: 0 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 SCypher GUI - Backend Test</h1>
+
+        <div class="debug-buttons">
+            <button onclick="retryInitialization()">🔄 Retry Tauri Init</button>
+            <button onclick="debugTauri()">🔍 Debug Info</button>
+            <button onclick="manualTest()">⚡ Manual Test</button>
+        </div>
+
+        <div class="test-section">
+            <h3>🔗 Test 1: Backend Connection</h3>
+            <button onclick="testConnection()">Test Backend Connection</button>
+            <div class="result" id="connectionResult">Ready to test...</div>
+        </div>
+
+        <div class="test-section">
+            <h3>📝 Test 2: BIP39 Word Validation</h3>
+            <input type="text" id="wordInput" placeholder="Enter a word (try 'abandon' or 'invalid')" value="abandon">
+            <button onclick="testWordValidation()">Validate Word</button>
+            <div class="result" id="wordResult">Ready to test...</div>
+        </div>
+
+        <div class="test-section">
+            <h3>✅ Test 3: Seed Phrase Validation</h3>
+            <input type="text" id="seedInput" placeholder="Enter seed phrase" value="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about">
+            <button onclick="testSeedValidation()">Validate Seed Phrase</button>
+            <div class="result" id="seedResult">Ready to test...</div>
+        </div>
+
+        <div class="test-section">
+            <h3>🔄 Test 4: Seed Transformation</h3>
+            <input type="text" id="seedTransformInput" placeholder="Seed phrase" value="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about">
+            <input type="password" id="passwordInput" placeholder="Password" value="test123">
+            <button onclick="testTransformation()">Transform Seed</button>
+            <div class="result" id="transformResult">Ready to test...</div>
+        </div>
+
+        <div class="test-section">
+            <h3>🎲 Test 5: Seed Generation</h3>
+            <button onclick="testGeneration()">Generate 12-word Seed</button>
+            <div class="result" id="generateResult">Ready to test...</div>
+        </div>
+
+        <div class="status">
+            SCypher Backend Test Interface • Check console for detailed logs
+        </div>
+    </div>
+
+    <script>
+        // Variables globales
+        let invoke = null;
+        let initializationAttempts = 0;
+        const maxAttempts = 20;
+
+        // Funciones de debug
+        function debugTauri() {
+            console.log('=== TAURI DEBUG INFO ===');
+            console.log('window.__TAURI__:', !!window.__TAURI__);
+            console.log('window.__TAURI__ keys:', window.__TAURI__ ? Object.keys(window.__TAURI__) : 'undefined');
+            if (window.__TAURI__ && window.__TAURI__.tauri) {
+                console.log('tauri keys:', Object.keys(window.__TAURI__.tauri));
+                console.log('invoke available:', !!window.__TAURI__.tauri.invoke);
+            }
+            console.log('our invoke variable:', !!invoke);
+            console.log('initialization attempts:', initializationAttempts);
+
+            // Mostrar en la página también
+            const msg = `Tauri: ${!!window.__TAURI__} | invoke: ${!!invoke} | attempts: ${initializationAttempts}`;
+            document.getElementById('connectionResult').innerHTML = `🔍 Debug: ${msg}`;
+        }
+
+        function manualTest() {
+            console.log('=== MANUAL TEST ===');
+            if (window.__TAURI__ && window.__TAURI__.tauri && window.__TAURI__.tauri.invoke) {
+                console.log('Tauri is available, testing directly...');
+                window.__TAURI__.tauri.invoke('validate_bip39_word', { word: 'abandon' })
+                    .then(result => {
+                        console.log('Direct test result:', result);
+                        document.getElementById('connectionResult').innerHTML = `✅ Direct test success: ${result}`;
+                        if (!invoke) {
+                            invoke = window.__TAURI__.tauri.invoke;
+                            console.log('✅ invoke variable set manually');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Direct test error:', error);
+                        document.getElementById('connectionResult').innerHTML = `❌ Direct test failed: ${error}`;
+                    });
+            } else {
+                console.log('❌ Tauri not available for direct test');
+                document.getElementById('connectionResult').innerHTML = '❌ Tauri not available';
+            }
+        }
+
+        function attemptInitialization() {
+            initializationAttempts++;
+            console.log(`Initialization attempt ${initializationAttempts}`);
+
+            if (window.__TAURI__ && window.__TAURI__.tauri && window.__TAURI__.tauri.invoke) {
+                invoke = window.__TAURI__.tauri.invoke;
+                console.log('✅ Tauri invoke successfully initialized');
+
+                // Auto-test connection después de inicializar
+                setTimeout(testConnection, 100);
+                return true;
+            } else {
+                console.log(`❌ Tauri not ready yet (attempt ${initializationAttempts})`);
+
+                if (initializationAttempts < maxAttempts) {
+                    setTimeout(attemptInitialization, 200);
+                    return false;
+                } else {
+                    console.error('❌ Failed to initialize Tauri after maximum attempts');
+                    document.getElementById('connectionResult').innerHTML =
+                        '❌ Failed to initialize Tauri - try Manual Test or Debug buttons';
+                    return false;
+                }
+            }
+        }
+
+        function retryInitialization() {
+            console.log('🔄 Retrying initialization...');
+            initializationAttempts = 0;
+            invoke = null;
+            attemptInitialization();
+        }
+
+        // Funciones de test
+        async function testConnection() {
+            if (!invoke) {
+                document.getElementById('connectionResult').innerHTML =
+                    '❌ Tauri not initialized - try Debug Info or Manual Test buttons';
+                return;
+            }
+
+            const result = document.getElementById('connectionResult');
+            try {
+                result.innerHTML = '⏳ Testing connection...';
+                console.log('Calling validate_bip39_word...');
+                const isValid = await invoke('validate_bip39_word', { word: 'abandon' });
+                console.log('Result:', isValid);
+                result.innerHTML = `✅ Backend connected successfully!<br>Word 'abandon' is valid: ${isValid}`;
+                result.className = 'result';
+            } catch (error) {
+                console.error('Connection error:', error);
+                result.innerHTML = `❌ Connection failed: ${error}`;
+                result.className = 'result error';
+            }
+        }
+
+        async function testWordValidation() {
+            if (!invoke) {
+                document.getElementById('wordResult').innerHTML = '❌ Tauri not initialized yet';
+                return;
+            }
+
+            const word = document.getElementById('wordInput').value;
+            const result = document.getElementById('wordResult');
+            try {
+                result.innerHTML = '⏳ Validating word...';
+                const isValid = await invoke('validate_bip39_word', { word });
+
+                if (isValid) {
+                    result.innerHTML = `✅ Word "${word}" is valid BIP39 word`;
+                    result.className = 'result';
+                } else {
+                    try {
+                        const suggestions = await invoke('get_word_suggestions', { word });
+                        let suggestText = '';
+                        if (suggestions.length > 0) {
+                            suggestText = `<br>Suggestion: ${suggestions[0]}`;
+                        }
+                        result.innerHTML = `❌ Word "${word}" is not valid${suggestText}`;
+                    } catch {
+                        result.innerHTML = `❌ Word "${word}" is not valid`;
+                    }
+                    result.className = 'result error';
+                }
+            } catch (error) {
+                result.innerHTML = `❌ Error: ${error}`;
+                result.className = 'result error';
+                console.error('Word validation error:', error);
+            }
+        }
+
+        async function testSeedValidation() {
+            if (!invoke) {
+                document.getElementById('seedResult').innerHTML = '❌ Tauri not initialized yet';
+                return;
+            }
+
+            const phrase = document.getElementById('seedInput').value;
+            const result = document.getElementById('seedResult');
+            try {
+                result.innerHTML = '⏳ Validating seed phrase...';
+                const validation = await invoke('validate_seed_phrase', { phrase });
+
+                if (validation.valid) {
+                    result.innerHTML = `✅ ${validation.message}`;
+                    result.className = 'result';
+                } else {
+                    result.innerHTML = `❌ ${validation.message}`;
+                    result.className = 'result error';
+                }
+            } catch (error) {
+                result.innerHTML = `❌ Error: ${error}`;
+                result.className = 'result error';
+                console.error('Seed validation error:', error);
+            }
+        }
+
+        async function testTransformation() {
+            if (!invoke) {
+                document.getElementById('transformResult').innerHTML = '❌ Tauri not initialized yet';
+                return;
+            }
+
+            const phrase = document.getElementById('seedTransformInput').value;
+            const password = document.getElementById('passwordInput').value;
+            const result = document.getElementById('transformResult');
+
+            try {
+                result.innerHTML = '⏳ Transforming seed phrase...';
+                const transformResult = await invoke('transform_seed_phrase', {
+                    phrase,
+                    password,
+                    iterations: 5,
+                    memoryCost: 131072
+                });
+
+                if (transformResult.success) {
+                    result.innerHTML = `✅ Transformation successful!<br><strong>Result:</strong><br>${transformResult.result}`;
+                    result.className = 'result';
+                } else {
+                    result.innerHTML = `❌ Transformation failed: ${transformResult.error}`;
+                    result.className = 'result error';
+                }
+            } catch (error) {
+                result.innerHTML = `❌ Error: ${error}`;
+                result.className = 'result error';
+                console.error('Transformation error:', error);
+            }
+        }
+
+        async function testGeneration() {
+            if (!invoke) {
+                document.getElementById('generateResult').innerHTML = '❌ Tauri not initialized yet';
+                return;
+            }
+
+            const result = document.getElementById('generateResult');
+            try {
+                result.innerHTML = '⏳ Generating seed phrase...';
+                const generatedSeed = await invoke('generate_seed_phrase', { wordCount: 12 });
+                result.innerHTML = `✅ Generated 12-word seed:<br><strong>${generatedSeed}</strong>`;
+                result.className = 'result';
+            } catch (error) {
+                result.innerHTML = `❌ Error: ${error}`;
+                result.className = 'result error';
+                console.error('Generation error:', error);
+            }
+        }
+
+        // Inicialización automática
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, attempting Tauri initialization...');
+            setTimeout(attemptInitialization, 100);
+        });
+
+        window.addEventListener('load', function() {
+            if (!invoke) {
+                console.log('Window loaded, attempting Tauri initialization...');
+                setTimeout(attemptInitialization, 100);
+            }
+        });
+
+        // Hacer funciones disponibles globalmente
+        window.testConnection = testConnection;
+        window.testWordValidation = testWordValidation;
+        window.testSeedValidation = testSeedValidation;
+        window.testTransformation = testTransformation;
+        window.testGeneration = testGeneration;
+        window.retryInitialization = retryInitialization;
+        window.debugTauri = debugTauri;
+        window.manualTest = manualTest;
+    </script>
+</body>
+</html>
