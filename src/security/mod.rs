@@ -1,9 +1,12 @@
 // src/security/mod.rs - Módulo de seguridad y limpieza de memoria
 
 pub mod memory;
+pub mod process;
+pub mod environment;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use zeroize::Zeroize;
+use crate::error::Result;
 
 // Flag global para rastrear si la limpieza está configurada
 static CLEANUP_CONFIGURED: AtomicBool = AtomicBool::new(false);
@@ -24,10 +27,35 @@ pub fn setup_security_cleanup() {
     CLEANUP_CONFIGURED.store(true, Ordering::Relaxed);
 }
 
+/// Configurar protecciones completas de seguridad
+pub fn setup_comprehensive_security() -> Result<()> {
+    // Configurar protecciones de entorno
+    environment::setup_secure_environment()?;
+
+    // Configurar protecciones de proceso
+    process::setup_process_protections()?;
+
+    // Configurar límites de memoria
+    memory::configure_memory_limits()?;
+
+    // Intentar deshabilitar swap para el proceso
+    if let Err(_) = memory::disable_swap_for_process() {
+        eprintln!("Warning: Could not disable swap for process - sensitive data may be written to disk");
+    }
+
+    // Configurar limpieza de señales
+    setup_security_cleanup();
+
+    Ok(())
+}
+
 /// Limpieza segura de memoria al final de la aplicación
 pub fn secure_cleanup() {
     // Limpiar variables de entorno sensibles si las hay
     clear_environment_variables();
+
+    // Limpiar información del proceso
+    process::cleanup_process_info();
 
     // Sobrescribir stack con ceros (mejor esfuerzo)
     let mut dummy_buffer = vec![0u8; 4096];
@@ -44,6 +72,8 @@ fn clear_environment_variables() {
         "SCYPHER_PASSWORD",
         "SCYPHER_SEED",
         "TMPDIR",
+        "TEMP",
+        "TMP",
     ];
 
     for var in &sensitive_vars {
@@ -106,27 +136,41 @@ impl From<&str> for SecureString {
     }
 }
 
-/// Estructura para manejar datos binarios sensibles
+/// Estructura para manejar datos binarios sensibles con memoria bloqueada
 pub struct SecureBytes {
-    data: Vec<u8>,
+    data: memory::LockedBuffer,
 }
 
 impl SecureBytes {
     /// Crear nuevo vector de bytes seguro
-    pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
+    pub fn new(data: Vec<u8>) -> Result<Self> {
+        let locked_buffer = memory::LockedBuffer::from_vec(data)
+            .map_err(|e| crate::error::SCypherError::crypto(format!("Failed to create secure buffer: {}", e)))?;
+
+        Ok(Self { data: locked_buffer })
     }
 
     /// Crear desde slice
-    pub fn from_slice(slice: &[u8]) -> Self {
-        Self {
-            data: slice.to_vec(),
-        }
+    pub fn from_slice(slice: &[u8]) -> Result<Self> {
+        Self::new(slice.to_vec())
+    }
+
+    /// Crear buffer vacío de tamaño específico
+    pub fn with_capacity(size: usize) -> Result<Self> {
+        let locked_buffer = memory::LockedBuffer::new(size)
+            .map_err(|e| crate::error::SCypherError::crypto(format!("Failed to create secure buffer: {}", e)))?;
+
+        Ok(Self { data: locked_buffer })
     }
 
     /// Obtener referencia a los datos
     pub fn as_slice(&self) -> &[u8] {
-        &self.data
+        self.data.as_slice()
+    }
+
+    /// Obtener referencia mutable a los datos
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.data.as_mut_slice()
     }
 
     /// Longitud
@@ -139,17 +183,9 @@ impl SecureBytes {
         self.data.is_empty()
     }
 
-    /// Consumir y obtener el vector interno (sin limpieza)
-    pub fn into_vec(mut self) -> Vec<u8> {
-        let data = std::mem::replace(&mut self.data, Vec::new());
-        std::mem::forget(self); // Evitar que Drop limpie los datos
-        data
-    }
-}
-
-impl Drop for SecureBytes {
-    fn drop(&mut self) {
-        self.data.zeroize();
+    /// Verificar si la memoria está bloqueada
+    pub fn is_memory_locked(&self) -> bool {
+        self.data.is_locked()
     }
 }
 
@@ -191,6 +227,138 @@ pub mod utils {
         // Segundo pase: ceros
         buffer.zeroize();
     }
+
+    /// Crear SecureString desde entrada de usuario
+    pub fn secure_string_from_input(prompt: &str) -> Result<SecureString> {
+        use rpassword::read_password;
+        use std::io::{self, Write};
+
+        print!("{}", prompt);
+        io::stdout().flush().map_err(crate::error::SCypherError::from)?;
+
+        let password = read_password()
+            .map_err(|e| crate::error::SCypherError::crypto(format!("Failed to read secure input: {}", e)))?;
+
+        Ok(SecureString::new(&password))
+    }
+}
+
+/// Verificar el estado general de seguridad del sistema
+pub fn security_audit() -> SecurityAuditReport {
+    let mut report = SecurityAuditReport::new();
+
+    // Auditar entorno
+    if let Err(e) = environment::validate_environment_safety() {
+        report.add_critical_issue(format!("Environment validation failed: {}", e));
+    }
+
+    // Verificar integridad del proceso
+    if !process::check_process_integrity() {
+        report.add_critical_issue("Process integrity check failed - debugger detected".to_string());
+    }
+
+    // Verificar límites de memoria
+    let (current_limit, max_limit) = memory::check_memory_lock_limits();
+    if current_limit == 0 {
+        report.add_warning("No memory locking limits configured".to_string());
+    } else if current_limit < 64 * 1024 * 1024 {
+        report.add_warning(format!("Low memory lock limit: {} bytes", current_limit));
+    }
+
+    // Verificar información del entorno
+    let env_info = environment::get_environment_info();
+    if env_info.get("container").unwrap_or(&"false".to_string()) == "true" {
+        report.add_info("Running in containerized environment".to_string());
+    }
+
+    if env_info.get("development").unwrap_or(&"false".to_string()) == "true" {
+        report.add_warning("Running in development environment".to_string());
+    }
+
+    report
+}
+
+/// Reporte de auditoría de seguridad
+pub struct SecurityAuditReport {
+    critical_issues: Vec<String>,
+    warnings: Vec<String>,
+    info: Vec<String>,
+}
+
+impl SecurityAuditReport {
+    fn new() -> Self {
+        Self {
+            critical_issues: Vec::new(),
+            warnings: Vec::new(),
+            info: Vec::new(),
+        }
+    }
+
+    fn add_critical_issue(&mut self, issue: String) {
+        self.critical_issues.push(issue);
+    }
+
+    fn add_warning(&mut self, warning: String) {
+        self.warnings.push(warning);
+    }
+
+    fn add_info(&mut self, info: String) {
+        self.info.push(info);
+    }
+
+    /// Verificar si hay problemas críticos
+    pub fn has_critical_issues(&self) -> bool {
+        !self.critical_issues.is_empty()
+    }
+
+    /// Obtener todos los problemas críticos
+    pub fn critical_issues(&self) -> &[String] {
+        &self.critical_issues
+    }
+
+    /// Obtener todas las advertencias
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// Obtener toda la información
+    pub fn info(&self) -> &[String] {
+        &self.info
+    }
+
+    /// Generar reporte legible
+    pub fn generate_report(&self) -> String {
+        let mut report = String::new();
+
+        if !self.critical_issues.is_empty() {
+            report.push_str("CRITICAL ISSUES:\n");
+            for issue in &self.critical_issues {
+                report.push_str(&format!("  ❌ {}\n", issue));
+            }
+            report.push('\n');
+        }
+
+        if !self.warnings.is_empty() {
+            report.push_str("WARNINGS:\n");
+            for warning in &self.warnings {
+                report.push_str(&format!("  ⚠️  {}\n", warning));
+            }
+            report.push('\n');
+        }
+
+        if !self.info.is_empty() {
+            report.push_str("INFORMATION:\n");
+            for info in &self.info {
+                report.push_str(&format!("  ℹ️  {}\n", info));
+            }
+        }
+
+        if report.is_empty() {
+            report.push_str("✅ No security issues detected\n");
+        }
+
+        report
+    }
 }
 
 #[cfg(test)]
@@ -210,7 +378,7 @@ mod tests {
     #[test]
     fn test_secure_bytes() {
         let data = vec![1, 2, 3, 4, 5];
-        let secure = SecureBytes::new(data.clone());
+        let secure = SecureBytes::new(data.clone()).unwrap();
 
         assert_eq!(secure.as_slice(), &data);
         assert_eq!(secure.len(), data.len());
@@ -232,5 +400,12 @@ mod tests {
         assert_eq!(bytes1.len(), 16);
         assert_eq!(bytes2.len(), 16);
         assert_ne!(bytes1, bytes2); // Extremadamente improbable que sean iguales
+    }
+
+    #[test]
+    fn test_security_audit() {
+        let report = security_audit();
+        // No debería causar panic
+        let _report_text = report.generate_report();
     }
 }

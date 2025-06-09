@@ -109,7 +109,46 @@ Technical Implementation:
 }
 
 fn main() {
-    // Configurar limpieza segura de memoria al salir
+    // ======= NUEVAS PROTECCIONES DE SEGURIDAD =======
+    // Configurar protecciones comprehensivas de seguridad al inicio
+    if let Err(e) = security::setup_comprehensive_security() {
+        eprintln!("Warning: Could not configure all security protections: {}", e);
+        eprintln!("Continuing with reduced security...");
+    }
+
+    // Realizar auditoría de seguridad
+    let security_report = security::security_audit();
+
+    // Mostrar reporte de seguridad si hay problemas
+    if security_report.has_critical_issues() {
+        eprintln!("SECURITY AUDIT REPORT:");
+        eprintln!("{}", security_report.generate_report());
+
+        // En modo release, terminar si hay problemas críticos
+        #[cfg(not(debug_assertions))]
+        {
+            eprintln!("Critical security issues detected. Terminating for safety.");
+            process::exit(1);
+        }
+
+        // En modo debug, solo advertir
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("Warning: Critical security issues detected, but continuing in debug mode.");
+        }
+    } else if !security_report.warnings().is_empty() || !security_report.info().is_empty() {
+        // Mostrar advertencias e información solo si no hay problemas críticos
+        eprintln!("Security status:");
+        for warning in security_report.warnings() {
+            eprintln!("  ⚠️  {}", warning);
+        }
+        for info in security_report.info() {
+            eprintln!("  ℹ️  {}", info);
+        }
+    }
+    // ======= FIN DE PROTECCIONES DE SEGURIDAD =======
+
+    // Configurar limpieza segura de memoria al salir (ESTA LÍNEA YA EXISTÍA)
     security::setup_security_cleanup();
 
     // Configurar CLI usando clap
@@ -119,6 +158,17 @@ fn main() {
         .long_about("SCypher provides secure, reversible transformation of BIP39 seed phrases \
                     using XOR encryption with Argon2id key derivation. The same operation \
                     performs both encryption and decryption due to XOR's symmetric nature.")
+
+        // Verificar argumentos especiales primero
+        .arg(Arg::new("license")
+            .long("license")
+            .help("Show license and disclaimer")
+            .action(clap::ArgAction::SetTrue))
+
+        .arg(Arg::new("details")
+            .long("details")
+            .help("Show detailed explanation of the XOR cipher process")
+            .action(clap::ArgAction::SetTrue))
 
         // Modo de operación (encrypt/decrypt son conceptualmente lo mismo pero útiles para claridad)
         .arg(Arg::new("encrypt")
@@ -178,17 +228,19 @@ fn main() {
             .help("Silent mode - no prompts, reads from stdin (for scripting)")
             .action(clap::ArgAction::SetTrue))
 
-        .arg(Arg::new("license")
-            .long("license")
-            .help("Show license and disclaimer")
-            .action(clap::ArgAction::SetTrue))
-
-        .arg(Arg::new("details")
-            .long("details")
-            .help("Show detailed explanation of the XOR cipher process")
-            .action(clap::ArgAction::SetTrue))
-
         .get_matches();
+
+    // Verificar argumentos especiales antes del procesamiento principal
+    if matches.get_flag("license") {
+        show_license();
+        return;
+    }
+
+    if matches.get_flag("details") {
+        show_details();
+        return;
+    }
+
 
 
     // Ejecutar la aplicación y manejar errores

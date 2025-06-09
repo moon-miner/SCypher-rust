@@ -15,9 +15,11 @@ rand = "0.8"           # Random number generation
 zeroize = "1.6"        # Secure memory clearing
 ctrlc = "3.0"          # Signal handling for cleanup
 
-# Nueva dependencia para control de terminal en Unix
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# Nuevas dependencias para protecciones de seguridad
+libc = "0.2"           # Para llamadas del sistema (mlock, prctl, etc.)
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["memoryapi", "errhandlingapi", "winbase"] }
 
 [profile.release]
 opt-level = 3          # Maximum optimization
