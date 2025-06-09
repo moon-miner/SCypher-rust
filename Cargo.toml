@@ -1,0 +1,23 @@
+[package]
+name = "scypher-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = "4.0"           # Command line argument parsing
+argon2 = "0.5"         # Password hashing
+hex = "0.4"            # Hex encoding/decoding
+sha2 = "0.10"          # SHA-256 for checksums
+rpassword = "7.0"      # Secure password input
+serde = "1.0"          # Serialization
+serde_json = "1.0"     # JSON handling
+rand = "0.8"           # Random number generation
+zeroize = "1.6"        # Secure memory clearing
+ctrlc = "3.0"          # Signal handling for cleanup
+
+[profile.release]
+opt-level = 3          # Maximum optimization
+lto = true             # Link-time optimization
+codegen-units = 1      # Better optimization
+panic = "abort"        # Smaller binary
+strip = true           # Remove debug symbols
