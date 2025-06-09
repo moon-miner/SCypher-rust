@@ -2,6 +2,7 @@
 
 pub mod input;
 pub mod output;
+pub mod silent;
 
 // Re-exportar funciones principales para fácil acceso
 pub use input::{
@@ -13,4 +14,12 @@ pub use input::{
 pub use output::{
     output_result,
     save_to_file,
+};
+
+pub use silent::{
+    read_seed_from_stdin,
+    read_password_from_stdin,
+    read_iterations_from_stdin,
+    detect_input_type,
+    InputType,
 };

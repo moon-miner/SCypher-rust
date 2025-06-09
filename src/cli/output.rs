@@ -45,27 +45,31 @@ pub fn output_result(result: &str, output_file: Option<&String>) -> Result<()> {
 
 /// Guardar contenido en archivo con permisos seguros
 pub fn save_to_file(content: &str, file_path: &str) -> Result<()> {
-    // Verificar si el archivo ya existe
-    if Path::new(file_path).exists() {
-        let msg = format!("File '{}' already exists. Overwrite?", file_path);
-        if !read_confirmation(&msg)? {
-            return Err(SCypherError::file("Operation cancelled by user"));
-        }
+    use std::path::Path;
+
+    if file_path.is_empty() {
+        return Err(SCypherError::file("File path is empty".to_string()));
     }
 
-    // Verificar que el directorio padre existe
-    if let Some(parent) = Path::new(file_path).parent() {
-        if !parent.exists() {
-            return Err(SCypherError::file(
-                format!("Directory '{}' does not exist", parent.display())
-            ));
-        }
+    let path = Path::new(file_path);
 
-        if !parent.is_dir() {
-            return Err(SCypherError::file(
-                format!("'{}' is not a directory", parent.display())
-            ));
-        }
+    // Manejar correctamente el directorio padre
+    let parent_dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new(".") // Si no hay padre o es vacío, usar directorio actual
+    };
+
+    // Verificar que el directorio padre existe
+    if !parent_dir.exists() {
+        return Err(SCypherError::file(
+            format!("Directory '{}' does not exist", parent_dir.display())
+        ));
+    }
+
+    if !parent_dir.is_dir() {
+        return Err(SCypherError::file(
+            format!("'{}' is not a directory", parent_dir.display())
+        ));
     }
 
     // Escribir archivo

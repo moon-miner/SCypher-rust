@@ -17,6 +17,97 @@ const VERSION: &str = "3.0";
 const DEFAULT_ITERATIONS: &str = "5";
 const DEFAULT_MEMORY_COST: &str = "131072"; // 128MB en KB
 
+/// Muestra la licencia y disclaimer
+fn show_license() {
+    println!(r#"
+SCypher v{} - License and Disclaimer
+
+License:
+This project is released under the MIT License. You are free to:
+- Use the software commercially
+- Modify the source code
+- Distribute the software
+- Use it privately
+
+Disclaimer:
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The developers assume no responsibility for:
+- Loss of funds or assets
+- Incorrect usage of the software
+- Modifications made by third parties
+- Security implications of usage in specific contexts
+- Possible malfunction of the software
+
+⚠️  CRITICAL SECURITY WARNING:
+This software handles cryptocurrency seed phrases. Always:
+- Test with non-critical phrases first
+- Keep secure backups of original seeds
+- Use strong, unique passwords
+- Verify results before using with real funds
+"#, VERSION);
+}
+
+/// Muestra explicación detallada del proceso XOR
+fn show_details() {
+    println!(r#"
+SCypher v{} - Technical Details
+
+How XOR-Based Seed Encryption Works:
+
+1. Core Concept - XOR Encryption:
+   • XOR (exclusive OR) is a reversible binary operation
+   • When you XOR data twice with the same key, you get back the original
+   • Formula: (data XOR key) XOR key = data
+
+2. The Process:
+   Encryption:
+   • Your seed phrase is converted to binary (11 bits per word)
+   • Your password generates a keystream using Argon2id key derivation
+   • Multiple iterations strengthen the keystream against attacks
+   • Binary seed XOR keystream = encrypted binary
+   • Encrypted binary is converted back to valid BIP39 words
+   • The checksum is recalculated to ensure BIP39 validity
+
+   Decryption:
+   • The encrypted phrase is converted to binary
+   • Same password and iterations generate the identical keystream
+   • Encrypted binary XOR keystream = original binary
+   • Original binary is converted back to your seed phrase
+
+3. Security Features:
+   • Argon2id memory-hard key derivation function
+   • Iterations add computational cost for attackers
+   • XOR provides perfect secrecy with secure keystream
+   • Output is always a valid BIP39 phrase with correct checksum
+   • No statistical patterns in encrypted output
+   • Secure memory cleanup prevents data leaks
+
+4. Checksum Handling:
+   • BIP39 phrases include a checksum for error detection
+   • After XOR encryption, we recalculate the checksum
+   • This ensures compatibility with all BIP39-compliant wallets
+   • The recalculation is deterministic and preserves security
+
+5. Important Security Notes:
+   • Same password + iterations always produces same result
+   • Use strong, unique passwords for maximum security
+   • More iterations = more security but slower processing
+   • Test with non-critical phrases first
+   • Keep secure backups of original seeds
+
+Technical Implementation:
+- Language: Rust (memory-safe, secure)
+- Key Derivation: Argon2id (memory-hard, GPU-resistant)
+- XOR Implementation: Bit-level operations
+- Memory Management: Automatic cleanup with zeroize
+- BIP39 Compliance: Full wordlist validation and checksum verification
+"#, VERSION);
+}
+
 fn main() {
     // Configurar limpieza segura de memoria al salir
     security::setup_security_cleanup();
@@ -81,7 +172,24 @@ fn main() {
             .help("Skip BIP39 checksum verification (not recommended)")
             .action(clap::ArgAction::SetTrue))
 
+        .arg(Arg::new("silent")
+            .short('s')
+            .long("silent")
+            .help("Silent mode - no prompts, reads from stdin (for scripting)")
+            .action(clap::ArgAction::SetTrue))
+
+        .arg(Arg::new("license")
+            .long("license")
+            .help("Show license and disclaimer")
+            .action(clap::ArgAction::SetTrue))
+
+        .arg(Arg::new("details")
+            .long("details")
+            .help("Show detailed explanation of the XOR cipher process")
+            .action(clap::ArgAction::SetTrue))
+
         .get_matches();
+
 
     // Ejecutar la aplicación y manejar errores
     if let Err(e) = run(&matches) {
@@ -115,11 +223,23 @@ fn main() {
 
 /// Función principal que coordina toda la operación
 fn run(matches: &clap::ArgMatches) -> Result<()> {
+    // Manejar argumentos que terminan la ejecución inmediatamente
+    if matches.get_flag("license") {
+        show_license();
+        return Ok(());
+    }
+
+    if matches.get_flag("details") {
+        show_details();
+        return Ok(());
+    }
+
     // Extraer argumentos
     let is_decrypt_mode = matches.get_flag("decrypt");
     let output_file = matches.get_one::<String>("output");
     let input_file = matches.get_one::<String>("input-file");
     let skip_checksum = matches.get_flag("skip-checksum");
+    let silent_mode = matches.get_flag("silent");
 
     // Obtener parámetros de seguridad
     let iterations = *matches.get_one::<u32>("iterations").unwrap();
@@ -128,36 +248,54 @@ fn run(matches: &clap::ArgMatches) -> Result<()> {
     // Validar parámetros
     validate_crypto_params(iterations, memory_cost)?;
 
-    // Mostrar modo de operación (solo informativo, XOR es simétrico)
-    let mode_name = if is_decrypt_mode { "Decryption" } else { "Encryption" };
-    println!("SCypher v{} - {} Mode", VERSION, mode_name);
-    println!("Security: Argon2id with {} iterations, {}KB memory\n", iterations, memory_cost);
+    // Solo mostrar información de modo en modo NO silencioso
+    if !silent_mode {
+        let mode_name = if is_decrypt_mode { "Decryption" } else { "Encryption" };
+        println!("SCypher v{} - {} Mode", VERSION, mode_name);
+        println!("Security: Argon2id with {} iterations, {}KB memory\n", iterations, memory_cost);
+    }
 
-    // 1. Obtener frase semilla
-    let seed_phrase = if let Some(file_path) = input_file {
-        cli::read_seed_from_file(file_path)?
+    // 1. Obtener frase semilla según el modo
+    let seed_phrase = if silent_mode {
+        if let Some(file_path) = input_file {
+            cli::read_seed_from_file(file_path)?
+        } else {
+            cli::read_seed_from_stdin()?
+        }
     } else {
-        cli::read_seed_interactive(is_decrypt_mode)?
+        if let Some(file_path) = input_file {
+            cli::read_seed_from_file(file_path)?
+        } else {
+            cli::read_seed_interactive(is_decrypt_mode)?
+        }
     };
 
     // 2. Validar formato BIP39
     if !skip_checksum {
-        println!("Validating BIP39 format...");
+        if !silent_mode {
+            println!("Validating BIP39 format...");
+        }
         bip39::validate_seed_phrase_complete(&seed_phrase)?;
-        println!("✓ Seed phrase format is valid\n");
-    } else {
-        println!("⚠️  Skipping BIP39 validation (not recommended)\n");
+        if !silent_mode {
+            println!("✓ Seed phrase format is valid\n");
+        }
     }
 
-    // 3. Obtener contraseña de forma segura
-    let password = cli::read_password_secure()?;
+    // 3. Obtener contraseña según el modo
+    let password = if silent_mode {
+        cli::read_password_from_stdin()?
+    } else {
+        cli::read_password_secure()?
+    };
 
     // 4. Realizar transformación XOR
-    println!("Processing with Argon2id key derivation...");
+    if !silent_mode {
+        println!("Processing with Argon2id key derivation...");
+    }
     let result = crypto::transform_seed(&seed_phrase, &password, iterations, memory_cost)?;
 
     // 5. Verificar resultado si es modo descifrado
-    if is_decrypt_mode && !skip_checksum {
+    if is_decrypt_mode && !skip_checksum && !silent_mode {
         match bip39::verify_checksum(&result) {
             Ok(true) => println!("✓ Result has valid BIP39 checksum"),
             Ok(false) => println!("⚠️  Result checksum is invalid - check password and input"),
@@ -166,9 +304,20 @@ fn run(matches: &clap::ArgMatches) -> Result<()> {
     }
 
     // 6. Mostrar y guardar resultado
-    cli::output_result(&result, output_file)?;
+    if silent_mode {
+        // En modo silent, solo imprimir el resultado sin decoraciones
+        println!("{}", result);
 
-    println!("\n✓ Operation completed successfully");
+        // Si hay archivo de salida, guardarlo silenciosamente
+        if let Some(file_path) = output_file {
+            cli::save_to_file(&result, file_path)?;
+        }
+    } else {
+        // Modo interactivo normal con decoraciones
+        cli::output_result(&result, output_file)?;
+        println!("\n✓ Operation completed successfully");
+    }
+
     Ok(())
 }
 
