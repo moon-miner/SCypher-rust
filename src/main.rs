@@ -221,25 +221,121 @@ fn main() {
     security::secure_cleanup();
 }
 
+/// Función helper para verificar si clap::ArgMatches tiene argumentos presentes
+trait ArgMatchesExt {
+    fn args_present(&self) -> bool;
+}
+
+impl ArgMatchesExt for clap::ArgMatches {
+    fn args_present(&self) -> bool {
+        // Verificar si algún argumento fue proporcionado
+        self.get_flag("decrypt") ||
+        self.get_one::<String>("output").is_some() ||
+        self.get_one::<String>("input-file").is_some() ||
+        self.get_flag("skip-checksum") ||
+        *self.get_one::<u32>("iterations").unwrap() != 5 ||  // Default value
+        *self.get_one::<u32>("memory").unwrap() != 131072    // Default value
+    }
+}
+
 /// Función principal que coordina toda la operación
 fn run(matches: &clap::ArgMatches) -> Result<()> {
-    // Manejar argumentos que terminan la ejecución inmediatamente
-    if matches.get_flag("license") {
-        show_license();
-        return Ok(());
+    // Verificar si hay argumentos CLI (modo no-interactivo)
+    let has_cli_args = matches.args_present();
+
+    // Si no hay argumentos CLI, ejecutar modo interactivo con menús
+    if !has_cli_args {
+        return run_interactive_mode();
     }
 
-    if matches.get_flag("details") {
-        show_details();
-        return Ok(());
+    // Modo CLI tradicional
+    run_cli_mode(matches)
+}
+
+/// Ejecutar modo interactivo con sistema de menús
+fn run_interactive_mode() -> Result<()> {
+    loop {
+        // Mostrar menú y obtener estado
+        let menu_state = cli::run_interactive_menu()?;
+
+        if menu_state.should_exit {
+            break;
+        }
+
+        if menu_state.return_to_main {
+            // Usuario eligió "Encrypt/Decrypt", ejecutar procesamiento interactivo
+            if let Err(e) = run_interactive_processing() {
+                cli::handle_menu_error(&e.to_string());
+                continue;
+            }
+        }
     }
 
+    Ok(())
+}
+
+/// Ejecutar procesamiento interactivo (desde menú)
+fn run_interactive_processing() -> Result<()> {
+    // Valores por defecto para modo interactivo
+    let iterations = 5u32;
+    let memory_cost = 131072u32;
+
+    cli::clear_screen();
+
+    // Mostrar información del modo
+    println!("{}SCypher v{} - Interactive Processing Mode{}",
+             cli::colors::BRIGHT, VERSION, cli::colors::RESET);
+    println!("{}Security: Argon2id with {} iterations, {}KB memory{}\n",
+             cli::colors::DIM, iterations, memory_cost, cli::colors::RESET);
+
+    // 1. Obtener frase semilla de forma interactiva
+    let seed_phrase = cli::read_seed_interactive(false)?;
+
+    // 2. Validar formato BIP39
+    println!("Validating BIP39 format...");
+    bip39::validate_seed_phrase_complete(&seed_phrase)?;
+    println!("{}✓ Seed phrase format is valid{}\n", cli::colors::SUCCESS, cli::colors::RESET);
+
+    // 3. Obtener contraseña de forma segura
+    let password = cli::read_password_secure()?;
+
+    // 4. Realizar transformación XOR
+    println!("Processing with Argon2id key derivation...");
+    let result = crypto::transform_seed(&seed_phrase, &password, iterations, memory_cost)?;
+
+    // 5. Verificar resultado
+    match bip39::verify_checksum(&result) {
+        Ok(true) => println!("{}✓ Result has valid BIP39 checksum{}", cli::colors::SUCCESS, cli::colors::RESET),
+        Ok(false) => println!("{}⚠️  Result checksum is invalid - check password and input{}", cli::colors::WARNING, cli::colors::RESET),
+        Err(_) => println!("{}⚠️  Could not verify result checksum{}", cli::colors::WARNING, cli::colors::RESET),
+    }
+
+    // 6. Mostrar resultado
+    println!();
+    println!("{}Result:{}", cli::colors::SUCCESS, cli::colors::RESET);
+    println!("─────────────────────────────────────────────────────────────");
+    println!("{}{}{}", cli::colors::PRIMARY, result, cli::colors::RESET);
+    println!("─────────────────────────────────────────────────────────────");
+
+    // 7. Manejar menú post-procesamiento
+    let should_exit = cli::handle_post_processing_menu(&result)?;
+
+    if should_exit {
+        println!("{}✓ Operation completed successfully{}", cli::colors::SUCCESS, cli::colors::RESET);
+        security::secure_cleanup();
+        std::process::exit(0);
+    }
+
+    Ok(())
+}
+
+/// Ejecutar modo CLI tradicional (con argumentos)
+fn run_cli_mode(matches: &clap::ArgMatches) -> Result<()> {
     // Extraer argumentos
     let is_decrypt_mode = matches.get_flag("decrypt");
     let output_file = matches.get_one::<String>("output");
     let input_file = matches.get_one::<String>("input-file");
     let skip_checksum = matches.get_flag("skip-checksum");
-    let silent_mode = matches.get_flag("silent");
 
     // Obtener parámetros de seguridad
     let iterations = *matches.get_one::<u32>("iterations").unwrap();
@@ -248,54 +344,36 @@ fn run(matches: &clap::ArgMatches) -> Result<()> {
     // Validar parámetros
     validate_crypto_params(iterations, memory_cost)?;
 
-    // Solo mostrar información de modo en modo NO silencioso
-    if !silent_mode {
-        let mode_name = if is_decrypt_mode { "Decryption" } else { "Encryption" };
-        println!("SCypher v{} - {} Mode", VERSION, mode_name);
-        println!("Security: Argon2id with {} iterations, {}KB memory\n", iterations, memory_cost);
-    }
+    // Mostrar modo de operación (solo informativo, XOR es simétrico)
+    let mode_name = if is_decrypt_mode { "Decryption" } else { "Encryption" };
+    println!("SCypher v{} - {} Mode", VERSION, mode_name);
+    println!("Security: Argon2id with {} iterations, {}KB memory\n", iterations, memory_cost);
 
-    // 1. Obtener frase semilla según el modo
-    let seed_phrase = if silent_mode {
-        if let Some(file_path) = input_file {
-            cli::read_seed_from_file(file_path)?
-        } else {
-            cli::read_seed_from_stdin()?
-        }
+    // 1. Obtener frase semilla
+    let seed_phrase = if let Some(file_path) = input_file {
+        cli::read_seed_from_file(file_path)?
     } else {
-        if let Some(file_path) = input_file {
-            cli::read_seed_from_file(file_path)?
-        } else {
-            cli::read_seed_interactive(is_decrypt_mode)?
-        }
+        cli::read_seed_interactive(is_decrypt_mode)?
     };
 
     // 2. Validar formato BIP39
     if !skip_checksum {
-        if !silent_mode {
-            println!("Validating BIP39 format...");
-        }
+        println!("Validating BIP39 format...");
         bip39::validate_seed_phrase_complete(&seed_phrase)?;
-        if !silent_mode {
-            println!("✓ Seed phrase format is valid\n");
-        }
+        println!("✓ Seed phrase format is valid\n");
+    } else {
+        println!("⚠️  Skipping BIP39 validation (not recommended)\n");
     }
 
-    // 3. Obtener contraseña según el modo
-    let password = if silent_mode {
-        cli::read_password_from_stdin()?
-    } else {
-        cli::read_password_secure()?
-    };
+    // 3. Obtener contraseña de forma segura
+    let password = cli::read_password_secure()?;
 
     // 4. Realizar transformación XOR
-    if !silent_mode {
-        println!("Processing with Argon2id key derivation...");
-    }
+    println!("Processing with Argon2id key derivation...");
     let result = crypto::transform_seed(&seed_phrase, &password, iterations, memory_cost)?;
 
     // 5. Verificar resultado si es modo descifrado
-    if is_decrypt_mode && !skip_checksum && !silent_mode {
+    if is_decrypt_mode && !skip_checksum {
         match bip39::verify_checksum(&result) {
             Ok(true) => println!("✓ Result has valid BIP39 checksum"),
             Ok(false) => println!("⚠️  Result checksum is invalid - check password and input"),
@@ -304,20 +382,9 @@ fn run(matches: &clap::ArgMatches) -> Result<()> {
     }
 
     // 6. Mostrar y guardar resultado
-    if silent_mode {
-        // En modo silent, solo imprimir el resultado sin decoraciones
-        println!("{}", result);
+    cli::output_result(&result, output_file)?;
 
-        // Si hay archivo de salida, guardarlo silenciosamente
-        if let Some(file_path) = output_file {
-            cli::save_to_file(&result, file_path)?;
-        }
-    } else {
-        // Modo interactivo normal con decoraciones
-        cli::output_result(&result, output_file)?;
-        println!("\n✓ Operation completed successfully");
-    }
-
+    println!("\n✓ Operation completed successfully");
     Ok(())
 }
 
@@ -352,31 +419,33 @@ fn validate_crypto_params(iterations: u32, memory_cost: u32) -> Result<()> {
 
 /// Mostrar información de ayuda extendida
 fn show_extended_help() {
-    println!(r#"
-SCypher v{} - XOR-based BIP39 Seed Cipher
+    cli::clear_screen();
+    cli::show_banner();
 
-SECURITY FEATURES:
-• XOR encryption with perfect reversibility
-• Argon2id memory-hard key derivation
-• BIP39 checksum preservation
-• Secure memory cleanup
-• No network access required
+    println!("{}SECURITY FEATURES:{}", cli::colors::SUCCESS, cli::colors::RESET);
+    println!("• XOR encryption with perfect reversibility");
+    println!("• Argon2id memory-hard key derivation");
+    println!("• BIP39 checksum preservation");
+    println!("• Secure memory cleanup");
+    println!("• No network access required");
+    println!();
 
-USAGE EXAMPLES:
-  scypher-rust                           # Interactive mode
-  scypher-rust -d                        # Decryption mode (same as encryption)
-  scypher-rust -i 10 -m 262144          # Higher security (10 iter, 256MB)
-  scypher-rust -f input.txt -o result   # File input/output
-  scypher-rust --skip-checksum          # Skip validation (not recommended)
+    println!("{}USAGE EXAMPLES:{}", cli::colors::PRIMARY, cli::colors::RESET);
+    println!("  scypher-rust                           # Interactive mode with menus");
+    println!("  scypher-rust -d                        # Decryption mode (same as encryption)");
+    println!("  scypher-rust -i 10 -m 262144          # Higher security (10 iter, 256MB)");
+    println!("  scypher-rust -f input.txt -o result   # File input/output");
+    println!("  scypher-rust --skip-checksum          # Skip validation (not recommended)");
+    println!();
 
-SECURITY PARAMETERS:
-• Iterations: Higher = more CPU time for attackers (1-100)
-• Memory: Higher = more RAM needed for attacks (8MB-2GB)
-• Recommended: 5 iterations, 128MB memory
+    println!("{}SECURITY PARAMETERS:{}", cli::colors::WARNING, cli::colors::RESET);
+    println!("• Iterations: Higher = more CPU time for attackers (1-100)");
+    println!("• Memory: Higher = more RAM needed for attacks (8MB-2GB)");
+    println!("• Recommended: 5 iterations, 128MB memory");
+    println!();
 
-The same operation encrypts and decrypts due to XOR symmetry.
-Use strong, unique passwords for maximum security.
-"#, VERSION);
+    println!("{}The same operation encrypts and decrypts due to XOR symmetry.{}", cli::colors::DIM, cli::colors::RESET);
+    println!("{}Use strong, unique passwords for maximum security.{}", cli::colors::DIM, cli::colors::RESET);
 }
 
 #[cfg(test)]

@@ -15,6 +15,10 @@ rand = "0.8"           # Random number generation
 zeroize = "1.6"        # Secure memory clearing
 ctrlc = "3.0"          # Signal handling for cleanup
 
+# Nueva dependencia para control de terminal en Unix
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
 opt-level = 3          # Maximum optimization
 lto = true             # Link-time optimization

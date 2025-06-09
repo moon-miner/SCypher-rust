@@ -351,6 +351,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "hex",
+ "libc",
  "rand",
  "rpassword",
  "serde",

@@ -2,7 +2,8 @@
 
 pub mod input;
 pub mod output;
-pub mod silent;
+pub mod display;
+pub mod menu;
 
 // Re-exportar funciones principales para fácil acceso
 pub use input::{
@@ -16,10 +17,15 @@ pub use output::{
     save_to_file,
 };
 
-pub use silent::{
-    read_seed_from_stdin,
-    read_password_from_stdin,
-    read_iterations_from_stdin,
-    detect_input_type,
-    InputType,
+pub use menu::{
+    run_interactive_menu,
+    handle_post_processing_menu,
+    handle_menu_error,
+    MenuState,
+};
+
+pub use display::{
+    clear_screen,
+    show_banner,
+    colors,
 };

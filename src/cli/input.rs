@@ -12,43 +12,30 @@ pub fn read_seed_interactive(is_decrypt_mode: bool) -> Result<String> {
     let prompt = if is_decrypt_mode {
         "\nEnter encrypted seed phrase to decrypt:"
     } else {
-        "\nEnter original seed phrase to encrypt:"
+        "\nEnter seed phrase to encrypt:"
     };
 
     println!("{}", prompt);
-    println!("(Enter seed phrase, then press Enter twice to confirm)\n");
+    print!("> ");
+    io::stdout().flush().map_err(SCypherError::from)?;
 
-    // Leer múltiples líneas hasta que el usuario presione Enter dos veces
-    let mut lines = Vec::new();
-    let mut empty_line_count = 0;
+    // Leer una sola línea directamente
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).map_err(SCypherError::from)?;
 
-    loop {
-        print!("> ");
-        io::stdout().flush().map_err(SCypherError::from)?;
+    let seed_phrase = input.trim().to_string();
 
-        let mut line = String::new();
-        io::stdin().read_line(&mut line).map_err(SCypherError::from)?;
-
-        let trimmed = line.trim();
-
-        if trimmed.is_empty() {
-            empty_line_count += 1;
-            if empty_line_count >= 2 || !lines.is_empty() {
-                break;
-            }
-        } else {
-            empty_line_count = 0;
-            lines.push(trimmed.to_string());
-        }
+    // Verificar si es un archivo
+    if seed_phrase.ends_with(".txt") && std::path::Path::new(&seed_phrase).exists() {
+        println!("Reading from file: {}", seed_phrase);
+        return read_seed_from_file(&seed_phrase);
     }
 
-    if lines.is_empty() {
+    if seed_phrase.is_empty() {
         return Err(SCypherError::InvalidSeedPhrase);
     }
 
-    let seed_phrase = lines.join(" ");
     validate_seed_input(&seed_phrase)?;
-
     Ok(seed_phrase)
 }
 
@@ -88,32 +75,95 @@ pub fn read_password_secure() -> Result<String> {
         print!("Enter password: ");
         io::stdout().flush().map_err(SCypherError::from)?;
 
-        let password = read_password()
-            .map_err(|e| SCypherError::crypto(format!("Failed to read password: {}", e)))?;
+        let password = read_password_with_asterisks()?;
+        println!(); // Nueva línea después de la entrada
 
-        // Validar longitud mínima
-        if password.len() < MIN_PASSWORD_LENGTH {
-            println!("❌ Password too short (minimum {} characters)", MIN_PASSWORD_LENGTH);
-            println!("Please try again.\n");
-            continue;
-        }
-
-        // Confirmar contraseña
         print!("Confirm password: ");
         io::stdout().flush().map_err(SCypherError::from)?;
 
-        let password_confirm = read_password()
-            .map_err(|e| SCypherError::crypto(format!("Failed to read password confirmation: {}", e)))?;
+        let password_confirm = read_password_with_asterisks()?;
+        println!(); // Nueva línea después de la confirmación
 
         if password != password_confirm {
-            println!("❌ Passwords do not match");
-            println!("Please try again.\n");
+            println!("❌ Password mismatch. Please try again.\n");
+            continue;
+        }
+
+        if password.len() < MIN_PASSWORD_LENGTH {
+            println!("❌ Password too short (minimum {} characters). Please try again.\n", MIN_PASSWORD_LENGTH);
             continue;
         }
 
         println!("✓ Password confirmed\n");
         return Ok(password);
     }
+}
+
+/// Función mejorada para leer contraseña con asteriscos
+fn read_password_with_asterisks() -> Result<String> {
+    use std::io::Read;
+
+    let mut password = String::new();
+
+    // Configurar terminal para modo raw
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let stdin_fd = io::stdin().as_raw_fd();
+
+        // Obtener configuración actual del terminal
+        let mut termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(stdin_fd, &mut termios) } != 0 {
+            // Si falla, usar rpassword como fallback
+            return Ok(rpassword::read_password().map_err(|e|
+                SCypherError::crypto(format!("Failed to read password: {}", e)))?);
+        }
+
+        // Guardar configuración original
+        let original_termios = termios;
+
+        // Deshabilitar echo y modo canónico
+        termios.c_lflag &= !(libc::ECHO | libc::ICANON);
+
+        if unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &termios) } != 0 {
+            return Ok(rpassword::read_password().map_err(|e|
+                SCypherError::crypto(format!("Failed to read password: {}", e)))?);
+        }
+
+        // Leer caracteres uno por uno
+        let stdin = io::stdin();
+        for byte in stdin.bytes() {
+            match byte {
+                Ok(b'\n') | Ok(b'\r') => break,
+                Ok(127) | Ok(8) => { // Backspace o DEL
+                    if !password.is_empty() {
+                        password.pop();
+                        print!("\x08 \x08"); // Borrar asterisco
+                        io::stdout().flush().unwrap_or(());
+                    }
+                }
+                Ok(b) if b >= 32 && b <= 126 => { // Caracteres imprimibles
+                    password.push(b as char);
+                    print!("*");
+                    io::stdout().flush().unwrap_or(());
+                }
+                Ok(_) => {} // Ignorar otros caracteres de control
+                Err(_) => break,
+            }
+        }
+
+        // Restaurar configuración original del terminal
+        unsafe { libc::tcsetattr(stdin_fd, libc::TCSANOW, &original_termios) };
+    }
+
+    #[cfg(not(unix))]
+    {
+        // En Windows o otros sistemas, usar rpassword como fallback
+        return Ok(rpassword::read_password().map_err(|e|
+            SCypherError::crypto(format!("Failed to read password: {}", e)))?);
+    }
+
+    Ok(password)
 }
 
 /// Validar entrada de frase semilla
@@ -126,6 +176,11 @@ fn validate_seed_input(seed_phrase: &str) -> Result<()> {
     // Verificar que no esté vacía
     if seed_phrase.trim().is_empty() {
         return Err(SCypherError::InvalidSeedPhrase);
+    }
+
+    // Si parece ser un archivo, no validar como seed phrase
+    if seed_phrase.ends_with(".txt") || seed_phrase.contains("/") || seed_phrase.contains("\\") {
+        return Ok(()); // Los archivos se validan en otra función
     }
 
     // Verificar caracteres básicos (solo letras, números y espacios)
