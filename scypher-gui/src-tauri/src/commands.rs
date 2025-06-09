@@ -168,17 +168,39 @@ pub fn save_file_dialog() -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Generar nueva frase semilla
+/// Generar nueva frase semilla - Acepta tanto String como usize
 #[command]
-pub fn generate_seed_phrase(word_count: usize) -> Result<String> {
+pub fn generate_seed_phrase(word_count: serde_json::Value) -> Result<String> {
+    // Parsear el word_count de manera flexible
+    let count: usize = match word_count {
+        serde_json::Value::Number(n) => {
+            if let Some(num) = n.as_u64() {
+                num as usize
+            } else {
+                return Err(SCypherError::crypto("Invalid word count number".to_string()));
+            }
+        }
+        serde_json::Value::String(s) => {
+            s.parse::<usize>()
+                .map_err(|_| SCypherError::crypto(format!("Cannot parse '{}' as number", s)))?
+        }
+        _ => return Err(SCypherError::crypto("Word count must be a number or string".to_string())),
+    };
+
+    // Validar rango
+    let valid_counts = [12, 15, 18, 21, 24];
+    if !valid_counts.contains(&count) {
+        return Err(SCypherError::InvalidWordCount(count));
+    }
+
     // Calcular bits de entropía según BIP39
-    let entropy_bits = match word_count {
+    let entropy_bits = match count {
         12 => 128,
         15 => 160,
         18 => 192,
         21 => 224,
         24 => 256,
-        _ => return Err(SCypherError::InvalidWordCount(word_count)),
+        _ => return Err(SCypherError::InvalidWordCount(count)),
     };
 
     crate::bip39::conversion::generate_seed_phrase(entropy_bits)
